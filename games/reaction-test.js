@@ -34,6 +34,11 @@ let currentMatch = null;
 let currentChannel = null;
 let queueChannel = null;
 let rankedClickLocked = false;
+let greenFlipTimer = null;
+
+// Guard to prevent attaching to the same match twice when both
+// realtime AND polling fire nearly simultaneously
+let isAttachingToMatch = false;
 
 loadPersonalBest();
 loadLeaderboard();
@@ -87,7 +92,7 @@ function checkUsernameOnOpen() {
 }
 
 function showNameModal() {
-  nicknameInput.value = getSavedNickname();
+  nicknameInput.value = getSavedNickname() || "";
   nameModal.style.display = "flex";
   nicknameInput.focus();
 }
@@ -103,6 +108,8 @@ function getSavedNickname() {
 function updateUsernameChip() {
   usernameChip.textContent = `User: ${getSavedNickname() || "--"}`;
 }
+
+// ─── Solo ────────────────────────────────────────────────────────────────────
 
 function handleSoloClick() {
   if (soloState === "idle") {
@@ -239,6 +246,8 @@ async function loadLeaderboard() {
   });
 }
 
+// ─── Ranked queue ─────────────────────────────────────────────────────────────
+
 async function joinRankedQueue() {
   mode = "ranked";
   rankedBtn.disabled = true;
@@ -246,6 +255,7 @@ async function joinRankedQueue() {
   rankedStatus.textContent = "Searching for player...";
   text.textContent = "Searching for ranked match...";
   box.className = "blue";
+  isAttachingToMatch = false;
 
   const nickname = getSavedNickname();
 
@@ -259,7 +269,7 @@ async function joinRankedQueue() {
     console.error(deleteOwnError);
   }
 
-  // insert self into queue first
+  // insert self into queue
   const { error: insertQueueError } = await supabaseClient
     .from("ranked_queue")
     .insert([{ nickname }]);
@@ -276,7 +286,7 @@ async function joinRankedQueue() {
   // small delay so both players can appear in queue
   await new Promise((resolve) => setTimeout(resolve, 600));
 
-  // check queue again
+  // check queue for an opponent
   const { data: queueRows, error: queueError } = await supabaseClient
     .from("ranked_queue")
     .select("*")
@@ -302,7 +312,7 @@ async function joinRankedQueue() {
     return;
   }
 
-  // try to remove both rows from queue
+  // remove both players from the queue
   await supabaseClient.from("ranked_queue").delete().eq("nickname", nickname);
   await supabaseClient.from("ranked_queue").delete().eq("nickname", opponent.nickname);
 
@@ -333,6 +343,35 @@ async function joinRankedQueue() {
 
 let matchPoll = null;
 
+// ─── KEY FIX: two separate .eq() queries instead of one .or() ─────────────────
+// The Supabase JS .or() filter is unreliable for multi-column string matching.
+// Two plain .eq() queries run in parallel are unambiguous and always work.
+async function findActiveMatchForNickname(nickname) {
+  const [{ data: asP1 }, { data: asP2 }] = await Promise.all([
+    supabaseClient
+      .from("ranked_matches")
+      .select("id, player1, player2, status")
+      .eq("player1", nickname)
+      .neq("status", "finished")
+      .order("id", { ascending: false })
+      .limit(1),
+    supabaseClient
+      .from("ranked_matches")
+      .select("id, player1, player2, status")
+      .eq("player2", nickname)
+      .neq("status", "finished")
+      .order("id", { ascending: false })
+      .limit(1)
+  ]);
+
+  const candidates = [...(asP1 || []), ...(asP2 || [])];
+  if (candidates.length === 0) return null;
+
+  // Return the most recent active match
+  candidates.sort((a, b) => b.id - a.id);
+  return candidates[0];
+}
+
 function watchForMatch() {
   const nickname = getSavedNickname();
 
@@ -346,6 +385,7 @@ function watchForMatch() {
     matchPoll = null;
   }
 
+  // Realtime: listen for a new match being inserted
   queueChannel = supabaseClient
     .channel("ranked-match-finder-" + nickname)
     .on(
@@ -356,15 +396,20 @@ function watchForMatch() {
         table: "ranked_matches"
       },
       async (payload) => {
-        console.log("Realtime payload:", payload);
+        console.log("Realtime INSERT on ranked_matches:", payload);
 
         const row = payload.new;
-        if (row.player1 === nickname || row.player2 === nickname) {
+        if (
+          (row.player1 === nickname || row.player2 === nickname) &&
+          row.status !== "finished" &&
+          !isAttachingToMatch
+        ) {
+          isAttachingToMatch = true;
+
           if (matchPoll) {
             clearInterval(matchPoll);
             matchPoll = null;
           }
-
           if (queueChannel) {
             supabaseClient.removeChannel(queueChannel);
             queueChannel = null;
@@ -379,21 +424,17 @@ function watchForMatch() {
       console.log("queueChannel status:", status);
     });
 
-    matchPoll = setInterval(async () => {
-    const { data, error } = await supabaseClient
-      .from("ranked_matches")
-      .select("id, player1, player2")
-      .or(`player1.eq."${nickname}",player2.eq."${nickname}"`)
-      .order("id", { ascending: false })
-      .limit(1);
+  // Polling fallback every 500ms — catches cases where realtime is slow or missed
+  matchPoll = setInterval(async () => {
+    // Skip if we're already in the process of attaching
+    if (isAttachingToMatch) return;
 
-    if (error) {
-      console.error("Polling error:", error);
-      return;
-    }
+    const match = await findActiveMatchForNickname(nickname);
 
-    const match = data?.[0];
     if (match) {
+      console.log("Poll found match:", match);
+      isAttachingToMatch = true;
+
       clearInterval(matchPoll);
       matchPoll = null;
 
@@ -405,8 +446,10 @@ function watchForMatch() {
       await supabaseClient.from("ranked_queue").delete().eq("nickname", nickname);
       await attachToMatch(match.id);
     }
-  }, 1000);
+  }, 500);
 }
+
+// ─── Match attachment ─────────────────────────────────────────────────────────
 
 async function attachToMatch(matchId) {
   const { data, error } = await supabaseClient
@@ -421,6 +464,7 @@ async function attachToMatch(matchId) {
     rankedBtn.textContent = "⚔️ Play Ranked";
     rankedStatus.textContent = "Match load failed";
     mode = "solo";
+    isAttachingToMatch = false;
     return;
   }
 
@@ -478,6 +522,8 @@ async function refreshCurrentMatch() {
   renderRankedState();
 }
 
+// ─── UI rendering ─────────────────────────────────────────────────────────────
+
 function getYouAndOpponent() {
   const me = getSavedNickname();
 
@@ -530,6 +576,17 @@ function renderRankedState() {
       rankedStatus.textContent = "Get ready...";
       text.textContent = "Wait for green...";
       box.className = "blue";
+
+      // Schedule the green flip for BOTH players locally
+      if (greenFlipTimer) clearTimeout(greenFlipTimer);
+      const msUntilGreen = greenAt - Date.now();
+      greenFlipTimer = setTimeout(() => {
+        if (currentMatch && currentMatch.status === "waiting_clicks") {
+          rankedStatus.textContent = "Round live";
+          text.textContent = "CLICK!";
+          box.className = "green";
+        }
+      }, msUntilGreen + 30);
     } else {
       rankedStatus.textContent = "Round live";
       text.textContent = "CLICK!";
@@ -538,6 +595,11 @@ function renderRankedState() {
   }
 
   if (currentMatch.status === "round_result") {
+    if (greenFlipTimer) {
+      clearTimeout(greenFlipTimer);
+      greenFlipTimer = null;
+    }
+
     rankedStatus.textContent = currentMatch.round_winner
       ? `${currentMatch.round_winner} won round`
       : "Round result";
@@ -558,7 +620,12 @@ function renderRankedState() {
     rankedClickLocked = true;
   }
 
-    if (currentMatch.status === "finished") {
+  if (currentMatch.status === "finished") {
+    if (greenFlipTimer) {
+      clearTimeout(greenFlipTimer);
+      greenFlipTimer = null;
+    }
+
     const won = currentMatch.winner === info.me;
 
     rankedStatus.textContent = won ? "You won the match" : "You lost the match";
@@ -570,7 +637,6 @@ function renderRankedState() {
     rankedBtn.disabled = false;
     rankedBtn.textContent = "⚔️ Play Ranked";
 
-    // FIX 7: remove stale queue row for this user
     supabaseClient.from("ranked_queue").delete().eq("nickname", getSavedNickname());
 
     if (currentChannel) {
@@ -581,8 +647,11 @@ function renderRankedState() {
     currentMatch = null;
     mode = "solo";
     rankedClickLocked = false;
+    isAttachingToMatch = false;
   }
 }
+
+// ─── Round logic ──────────────────────────────────────────────────────────────
 
 async function maybeStartRound() {
   if (!currentMatch) return;
@@ -591,6 +660,12 @@ async function maybeStartRound() {
 
   if (!info.amPlayer1) return;
   if (currentMatch.status !== "starting") return;
+
+  // Wait briefly, then re-fetch to confirm we're the only one starting the round
+  await new Promise((r) => setTimeout(r, 200));
+  await refreshCurrentMatch();
+
+  if (!currentMatch || currentMatch.status !== "starting") return;
 
   const greenAt = new Date(Date.now() + (Math.random() * 2500 + 1500));
 
@@ -604,7 +679,13 @@ async function maybeStartRound() {
     })
     .eq("id", currentMatch.id);
 
-  if (error) console.error(error);
+  if (error) {
+    console.error(error);
+    return;
+  }
+
+  // Immediately refresh for player1 so they don't have to wait for realtime
+  await refreshCurrentMatch();
 }
 
 async function handleRankedClick() {
@@ -713,6 +794,8 @@ async function maybeResolveRound() {
     }, 1800);
   }
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function escapeHtml(str) {
   return str
