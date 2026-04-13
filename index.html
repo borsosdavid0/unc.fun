@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Goon.fun</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-blur bg-1"></div>
+  <div class="bg-blur bg-2"></div>
+
+  <header class="hero">
+    <p class="tag">interactive experiments</p>
+    <h1>goon.fun</h1>
+    <p class="subtitle">
+      Pick a mode and jump into weird little web games.
+    </p>
+  </header>
+
+  <main class="hub">
+    <section class="grid" id="gameGrid">
+      <button class="game-card featured" data-title="Gravity Toy" data-desc="A physics sandbox with floating shapes and mouse gravity.">
+        <span class="badge">NEW</span>
+        <h2>Gravity Toy</h2>
+        <p>Physics + particles + chaos</p> 
+      </button>
+
+      <button class="game-card" onclick="location.href='games/reaction-test.html'" data-title="Reaction Test" data-desc="Wait for the screen to turn green, then click as fast as possible.">
+        <h2>Reaction Test</h2>
+        <p>Simple, fast, addictive</p>
+      </button>
+
+      <button class="game-card" data-title="Mystery Button" data-desc="Every click changes the page in a random way.">
+        <h2>Mystery Button</h2>
+        <p>Random visual events</p>
+      </button>
+
+      <button class="game-card" data-title="Deep Space Scroll" data-desc="Zoom from your room all the way out into space.">
+        <h2>Deep Space Scroll</h2>
+        <p>Scale-based visual journey</p>
+      </button>
+
+      <button class="game-card" data-title="Fake OS" data-desc="A tiny fake computer desktop full of secrets.">
+        <h2>Fake OS</h2>
+        <p>Explore and click around</p>
+      </button>
+
+      <button class="game-card add-card" id="expandBtn">
+        <h2>+ Add More</h2>
+        <p>Expand the grid with more demo cards</p>
+      </button>
+    </section>
+
+    <section class="preview" id="preview">
+      <div class="preview-inner">
+        <p class="preview-label">Selected mode</p>
+        <h3 id="previewTitle">Choose a game</h3>
+        <p id="previewDesc">Click any card to preview how your menu will work.</p>
+
+        <div class="preview-actions">
+          <button class="primary-btn">Play</button>
+          <button class="secondary-btn">Info</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

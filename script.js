@@ -1,0 +1,59 @@
+const cards = document.querySelectorAll(".game-card[data-title]");
+const previewTitle = document.getElementById("previewTitle");
+const previewDesc = document.getElementById("previewDesc");
+const expandBtn = document.getElementById("expandBtn");
+const gameGrid = document.getElementById("gameGrid");
+
+cards.forEach((card) => {
+  card.addEventListener("click", () => {
+    previewTitle.textContent = card.dataset.title;
+    previewDesc.textContent = card.dataset.desc;
+  });
+});
+
+let expanded = false;
+
+expandBtn.addEventListener("click", () => {
+  if (expanded) return;
+  expanded = true;
+
+  const extraCards = [
+    {
+      title: "Night Driver",
+      desc: "A moody endless road game with neon lights."
+    },
+    {
+      title: "Timeline Chaos",
+      desc: "Drag a slider and watch weird alternate history events appear."
+    },
+    {
+      title: "Sound Lab",
+      desc: "Make strange music by clicking animated shapes."
+    },
+    {
+      title: "Pixel Aquarium",
+      desc: "Tiny fish, bubbles, and relaxing interactions."
+    }
+  ];
+
+  extraCards.forEach((item) => {
+    const btn = document.createElement("button");
+    btn.className = "game-card";
+    btn.dataset.title = item.title;
+    btn.dataset.desc = item.desc;
+    btn.innerHTML = `
+      <h2>${item.title}</h2>
+      <p>${item.desc}</p>
+    `;
+
+    btn.addEventListener("click", () => {
+      previewTitle.textContent = btn.dataset.title;
+      previewDesc.textContent = btn.dataset.desc;
+    });
+
+    gameGrid.appendChild(btn);
+  });
+
+  expandBtn.querySelector("h2").textContent = "Expanded";
+  expandBtn.querySelector("p").textContent = "You can keep adding more categories later";
+});
