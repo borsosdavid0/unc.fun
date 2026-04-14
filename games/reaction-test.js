@@ -35,10 +35,12 @@ let currentChannel = null;
 let queueChannel = null;
 let rankedClickLocked = false;
 let greenFlipTimer = null;
-
-// Guard to prevent attaching to the same match twice when both
-// realtime AND polling fire nearly simultaneously
+let matchPoll = null;
 let isAttachingToMatch = false;
+let nextRoundTimer = null;
+
+let heartbeatInterval = null;
+let disconnectCheckInterval = null;
 
 loadPersonalBest();
 loadLeaderboard();
@@ -220,7 +222,7 @@ async function loadLeaderboard() {
     .from("reaction_scores")
     .select("nickname, score_ms")
     .order("score_ms", { ascending: true })
-    .limit(10);
+    .limit(5);
 
   if (error) {
     leaderboardList.innerHTML = `<div class="entry"><span>Error loading</span><span>--</span></div>`;
@@ -255,26 +257,21 @@ async function joinRankedQueue() {
   rankedStatus.textContent = "Searching for player...";
   text.textContent = "Searching for ranked match...";
   box.className = "blue";
+
+  cleanupTimersOnly();
   isAttachingToMatch = false;
 
   const nickname = getSavedNickname();
 
-  // clear old queue row for this user
-  const { error: deleteOwnError } = await supabaseClient
+  await supabaseClient.from("ranked_queue").delete().eq("nickname", nickname);
+
+  const { data: myQueueRow, error: insertQueueError } = await supabaseClient
     .from("ranked_queue")
-    .delete()
-    .eq("nickname", nickname);
+    .insert([{ nickname }])
+    .select()
+    .single();
 
-  if (deleteOwnError) {
-    console.error(deleteOwnError);
-  }
-
-  // insert self into queue
-  const { error: insertQueueError } = await supabaseClient
-    .from("ranked_queue")
-    .insert([{ nickname }]);
-
-  if (insertQueueError) {
+  if (insertQueueError || !myQueueRow) {
     console.error(insertQueueError);
     rankedBtn.disabled = false;
     rankedBtn.textContent = "⚔️ Play Ranked";
@@ -283,15 +280,15 @@ async function joinRankedQueue() {
     return;
   }
 
-  // small delay so both players can appear in queue
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await new Promise((resolve) => setTimeout(resolve, 500));
 
-  // check queue for an opponent
   const { data: queueRows, error: queueError } = await supabaseClient
     .from("ranked_queue")
     .select("*")
     .neq("nickname", nickname)
-    .order("joined_at", { ascending: true });
+    .lt("id", myQueueRow.id)
+    .order("id", { ascending: true })
+    .limit(1);
 
   if (queueError) {
     console.error(queueError);
@@ -312,9 +309,10 @@ async function joinRankedQueue() {
     return;
   }
 
-  // remove both players from the queue
-  await supabaseClient.from("ranked_queue").delete().eq("nickname", nickname);
-  await supabaseClient.from("ranked_queue").delete().eq("nickname", opponent.nickname);
+  await supabaseClient.from("ranked_queue").delete().eq("id", myQueueRow.id);
+  await supabaseClient.from("ranked_queue").delete().eq("id", opponent.id);
+
+  const nowIso = new Date().toISOString();
 
   const { data: insertedMatch, error: matchError } = await supabaseClient
     .from("ranked_matches")
@@ -324,12 +322,14 @@ async function joinRankedQueue() {
       player1_lives: 3,
       player2_lives: 3,
       round_number: 1,
-      status: "starting"
+      status: "starting",
+      player1_last_seen: nowIso,
+      player2_last_seen: nowIso
     }])
     .select()
     .single();
 
-  if (matchError) {
+  if (matchError || !insertedMatch) {
     console.error(matchError);
     rankedBtn.disabled = false;
     rankedBtn.textContent = "⚔️ Play Ranked";
@@ -341,11 +341,6 @@ async function joinRankedQueue() {
   await attachToMatch(insertedMatch.id);
 }
 
-let matchPoll = null;
-
-// ─── KEY FIX: two separate .eq() queries instead of one .or() ─────────────────
-// The Supabase JS .or() filter is unreliable for multi-column string matching.
-// Two plain .eq() queries run in parallel are unambiguous and always work.
 async function findActiveMatchForNickname(nickname) {
   const [{ data: asP1 }, { data: asP2 }] = await Promise.all([
     supabaseClient
@@ -367,7 +362,6 @@ async function findActiveMatchForNickname(nickname) {
   const candidates = [...(asP1 || []), ...(asP2 || [])];
   if (candidates.length === 0) return null;
 
-  // Return the most recent active match
   candidates.sort((a, b) => b.id - a.id);
   return candidates[0];
 }
@@ -375,75 +369,27 @@ async function findActiveMatchForNickname(nickname) {
 function watchForMatch() {
   const nickname = getSavedNickname();
 
-  if (queueChannel) {
-    supabaseClient.removeChannel(queueChannel);
-    queueChannel = null;
-  }
-
   if (matchPoll) {
     clearInterval(matchPoll);
     matchPoll = null;
   }
 
-  // Realtime: listen for a new match being inserted
-  queueChannel = supabaseClient
-    .channel("ranked-match-finder-" + nickname)
-    .on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "ranked_matches"
-      },
-      async (payload) => {
-        console.log("Realtime INSERT on ranked_matches:", payload);
-
-        const row = payload.new;
-        if (
-          (row.player1 === nickname || row.player2 === nickname) &&
-          row.status !== "finished" &&
-          !isAttachingToMatch
-        ) {
-          isAttachingToMatch = true;
-
-          if (matchPoll) {
-            clearInterval(matchPoll);
-            matchPoll = null;
-          }
-          if (queueChannel) {
-            supabaseClient.removeChannel(queueChannel);
-            queueChannel = null;
-          }
-
-          await supabaseClient.from("ranked_queue").delete().eq("nickname", nickname);
-          await attachToMatch(row.id);
-        }
-      }
-    )
-    .subscribe((status) => {
-      console.log("queueChannel status:", status);
-    });
-
-  // Polling fallback every 500ms — catches cases where realtime is slow or missed
   matchPoll = setInterval(async () => {
-    // Skip if we're already in the process of attaching
     if (isAttachingToMatch) return;
 
     const match = await findActiveMatchForNickname(nickname);
 
     if (match) {
-      console.log("Poll found match:", match);
       isAttachingToMatch = true;
 
       clearInterval(matchPoll);
       matchPoll = null;
 
-      if (queueChannel) {
-        supabaseClient.removeChannel(queueChannel);
-        queueChannel = null;
-      }
+      await supabaseClient
+        .from("ranked_queue")
+        .delete()
+        .eq("nickname", nickname);
 
-      await supabaseClient.from("ranked_queue").delete().eq("nickname", nickname);
       await attachToMatch(match.id);
     }
   }, 500);
@@ -473,35 +419,27 @@ async function attachToMatch(matchId) {
   rankedBtn.disabled = true;
   rankedBtn.textContent = "In Ranked Match";
   rankedClickLocked = false;
+  startHeartbeat();
+  startDisconnectWatcher();
 
   if (currentChannel) {
-    supabaseClient.removeChannel(currentChannel);
+    clearInterval(currentChannel);
     currentChannel = null;
   }
 
-  currentChannel = supabaseClient
-    .channel("ranked-match-" + matchId)
-    .on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "ranked_matches",
-        filter: `id=eq.${matchId}`
-      },
-      async (payload) => {
-        console.log("match realtime payload:", payload);
-        await refreshCurrentMatch();
-      }
-    )
-    .subscribe(async (status) => {
-      console.log("match channel status:", status);
+  currentChannel = setInterval(async () => {
+    await refreshCurrentMatch();
 
-      if (status === "SUBSCRIBED") {
-        await refreshCurrentMatch();
-        await maybeStartRound();
-      }
-    });
+    // Resolve as soon as both reactions exist.
+    await maybeResolveRound();
+
+    // Start next round when appropriate.
+    await maybeStartRound();
+  }, 250);
+
+  await refreshCurrentMatch();
+  await maybeResolveRound();
+  await maybeStartRound();
 }
 
 async function refreshCurrentMatch() {
@@ -563,35 +501,26 @@ function renderRankedState() {
   roundNumberText.textContent = currentMatch.round_number;
 
   if (currentMatch.status === "starting") {
+    if (greenFlipTimer) {
+      clearTimeout(greenFlipTimer);
+      greenFlipTimer = null;
+    }
+
     rankedStatus.textContent = "Match found";
     text.textContent = `Match found vs ${info.opponent}`;
     box.className = "blue";
     rankedClickLocked = false;
+    rankedBtn.textContent = "In Ranked Match";
   }
 
   if (currentMatch.status === "waiting_clicks") {
     const greenAt = new Date(currentMatch.green_at).getTime();
+    const isLive = Date.now() >= greenAt;
 
-    if (Date.now() < greenAt) {
-      rankedStatus.textContent = "Get ready...";
-      text.textContent = "Wait for green...";
-      box.className = "blue";
-
-      // Schedule the green flip for BOTH players locally
-      if (greenFlipTimer) clearTimeout(greenFlipTimer);
-      const msUntilGreen = greenAt - Date.now();
-      greenFlipTimer = setTimeout(() => {
-        if (currentMatch && currentMatch.status === "waiting_clicks") {
-          rankedStatus.textContent = "Round live";
-          text.textContent = "CLICK!";
-          box.className = "green";
-        }
-      }, msUntilGreen + 30);
-    } else {
-      rankedStatus.textContent = "Round live";
-      text.textContent = "CLICK!";
-      box.className = "green";
-    }
+    rankedStatus.textContent = isLive ? "Round live" : "Get ready...";
+    text.textContent = isLive ? "CLICK!" : "Wait for green...";
+    box.className = isLive ? "green" : "blue";
+    rankedBtn.textContent = "In Ranked Match";
   }
 
   if (currentMatch.status === "round_result") {
@@ -618,6 +547,7 @@ function renderRankedState() {
     }
 
     rankedClickLocked = true;
+    rankedBtn.textContent = "In Ranked Match";
   }
 
   if (currentMatch.status === "finished") {
@@ -635,14 +565,33 @@ function renderRankedState() {
     box.className = won ? "green" : "red";
 
     rankedBtn.disabled = false;
+        rankedBtn.disabled = false;
     rankedBtn.textContent = "⚔️ Play Ranked";
 
     supabaseClient.from("ranked_queue").delete().eq("nickname", getSavedNickname());
 
     if (currentChannel) {
-      supabaseClient.removeChannel(currentChannel);
+      clearInterval(currentChannel);
       currentChannel = null;
     }
+
+    if (matchPoll) {
+      clearInterval(matchPoll);
+      matchPoll = null;
+    }
+
+    if (greenFlipTimer) {
+      clearTimeout(greenFlipTimer);
+      greenFlipTimer = null;
+    }
+
+    if (nextRoundTimer) {
+      clearTimeout(nextRoundTimer);
+      nextRoundTimer = null;
+    }
+
+    stopHeartbeat();
+    stopDisconnectWatcher();
 
     currentMatch = null;
     mode = "solo";
@@ -655,36 +604,38 @@ function renderRankedState() {
 
 async function maybeStartRound() {
   if (!currentMatch) return;
-
-  const info = getYouAndOpponent();
-
-  if (!info.amPlayer1) return;
   if (currentMatch.status !== "starting") return;
 
-  // Wait briefly, then re-fetch to confirm we're the only one starting the round
-  await new Promise((r) => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, 250));
   await refreshCurrentMatch();
 
   if (!currentMatch || currentMatch.status !== "starting") return;
 
   const greenAt = new Date(Date.now() + (Math.random() * 2500 + 1500));
 
-  const { error } = await supabaseClient
+  const { data, error } = await supabaseClient
     .from("ranked_matches")
     .update({
       status: "waiting_clicks",
       green_at: greenAt.toISOString(),
       player1_reaction: null,
-      player2_reaction: null
+      player2_reaction: null,
+      round_winner: null
     })
-    .eq("id", currentMatch.id);
+    .eq("id", currentMatch.id)
+    .eq("status", "starting")
+    .select()
+    .single();
 
   if (error) {
-    console.error(error);
+    console.error("maybeStartRound error:", error);
     return;
   }
 
-  // Immediately refresh for player1 so they don't have to wait for realtime
+  if (data) {
+    currentMatch = data;
+  }
+
   await refreshCurrentMatch();
 }
 
@@ -694,22 +645,26 @@ async function handleRankedClick() {
   if (rankedClickLocked) return;
 
   const info = getYouAndOpponent();
+  const myReactionColumn = info.amPlayer1 ? "player1_reaction" : "player2_reaction";
+
+  // already submitted a valid click this round
+  if (currentMatch[myReactionColumn] != null) return;
+
   const greenAt = new Date(currentMatch.green_at).getTime();
   const now = Date.now();
 
-  let reaction;
-
+  // Early click: warn, but do NOT submit anything and do NOT lock the player
   if (now < greenAt) {
-    reaction = 9999;
     text.textContent = "Too early 😭";
     box.className = "red";
-  } else {
-    reaction = now - greenAt;
-    text.textContent = `⚡ ${reaction} ms`;
-    box.className = "green";
+    return;
   }
 
+  const reaction = now - greenAt;
   rankedClickLocked = true;
+
+  text.textContent = `⚡ ${reaction} ms`;
+  box.className = "green";
 
   const updateData = info.amPlayer1
     ? { player1_reaction: reaction }
@@ -718,10 +673,12 @@ async function handleRankedClick() {
   const { error } = await supabaseClient
     .from("ranked_matches")
     .update(updateData)
-    .eq("id", currentMatch.id);
+    .eq("id", currentMatch.id)
+    .eq("status", "waiting_clicks")
+    .is(myReactionColumn, null);
 
   if (error) {
-    console.error(error);
+    console.error("handleRankedClick error:", error);
     rankedClickLocked = false;
     return;
   }
@@ -729,7 +686,41 @@ async function handleRankedClick() {
   setTimeout(async () => {
     await refreshCurrentMatch();
     await maybeResolveRound();
-  }, 250);
+  }, 200);
+}
+
+async function waitForRoundToFinish() {
+  if (!currentMatch) return;
+
+  const startedAt = Date.now();
+  const timeoutMs = 8000;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await refreshCurrentMatch();
+    if (!currentMatch) return;
+
+    if (currentMatch.status === "round_result" || currentMatch.status === "finished") {
+      return;
+    }
+
+    const info = getYouAndOpponent();
+
+    if (
+      info.amPlayer1 &&
+      currentMatch.status === "waiting_clicks" &&
+      currentMatch.player1_reaction != null &&
+      currentMatch.player2_reaction != null
+    ) {
+      await maybeResolveRound();
+      await refreshCurrentMatch();
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  console.warn("waitForRoundToFinish timed out");
+  rankedClickLocked = false;
 }
 
 async function maybeResolveRound() {
@@ -769,15 +760,23 @@ async function maybeResolveRound() {
       winner,
       status: finished ? "finished" : "round_result"
     })
-    .eq("id", currentMatch.id);
+    .eq("id", currentMatch.id)
+    .eq("status", "waiting_clicks");
 
   if (error) {
-    console.error(error);
+    console.error("maybeResolveRound error:", error);
     return;
   }
 
+  await refreshCurrentMatch();
+
   if (!finished) {
-    setTimeout(async () => {
+    if (nextRoundTimer) {
+      clearTimeout(nextRoundTimer);
+      nextRoundTimer = null;
+    }
+
+    nextRoundTimer = setTimeout(async () => {
       const { error: nextError } = await supabaseClient
         .from("ranked_matches")
         .update({
@@ -788,14 +787,50 @@ async function maybeResolveRound() {
           green_at: null,
           round_winner: null
         })
-        .eq("id", currentMatch.id);
+        .eq("id", currentMatch.id)
+        .eq("status", "round_result");
 
-      if (nextError) console.error(nextError);
+      if (nextError) {
+        console.error("next round error:", nextError);
+        return;
+      }
+
+      await refreshCurrentMatch();
+      await maybeStartRound();
     }, 1800);
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function cleanupTimersOnly() {
+  if (greenFlipTimer) {
+    clearTimeout(greenFlipTimer);
+    greenFlipTimer = null;
+  }
+
+  if (nextRoundTimer) {
+    clearTimeout(nextRoundTimer);
+    nextRoundTimer = null;
+  }
+}
+
+function cleanupRankedState() {
+  cleanupTimersOnly();
+
+  if (currentChannel) {
+    clearInterval(currentChannel);
+    currentChannel = null;
+  }
+
+  if (matchPoll) {
+    clearInterval(matchPoll);
+    matchPoll = null;
+  }
+
+  stopHeartbeat();
+  stopDisconnectWatcher();
+}
 
 function escapeHtml(str) {
   return str
@@ -805,3 +840,130 @@ function escapeHtml(str) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+
+function getHeartbeatColumn() {
+  const info = getYouAndOpponent();
+  return info.amPlayer1 ? "player1_last_seen" : "player2_last_seen";
+}
+
+function getOpponentHeartbeatColumn() {
+  const info = getYouAndOpponent();
+  return info.amPlayer1 ? "player2_last_seen" : "player1_last_seen";
+}
+
+function startHeartbeat() {
+  stopHeartbeat();
+
+  heartbeatInterval = setInterval(async () => {
+    if (!currentMatch) return;
+
+    const column = getHeartbeatColumn();
+
+    const { error } = await supabaseClient
+      .from("ranked_matches")
+      .update({ [column]: new Date().toISOString() })
+      .eq("id", currentMatch.id)
+      .neq("status", "finished");
+
+    if (error) {
+      console.error("heartbeat error:", error);
+    }
+  }, 2000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+}
+
+function startDisconnectWatcher() {
+  stopDisconnectWatcher();
+
+  disconnectCheckInterval = setInterval(async () => {
+    if (!currentMatch) return;
+    if (currentMatch.status === "finished") return;
+
+    const opponentColumn = getOpponentHeartbeatColumn();
+    const opponentLastSeen = currentMatch[opponentColumn];
+
+    if (!opponentLastSeen) return;
+
+    const diffMs = Date.now() - new Date(opponentLastSeen).getTime();
+
+    // if opponent hasn't been seen for 6 seconds, they lose
+    if (diffMs > 6000) {
+      const me = getSavedNickname();
+
+      const { error } = await supabaseClient
+        .from("ranked_matches")
+        .update({
+          status: "finished",
+          winner: me,
+          round_winner: me
+        })
+        .eq("id", currentMatch.id)
+        .neq("status", "finished");
+
+      if (error) {
+        console.error("disconnect win error:", error);
+        return;
+      }
+
+      await refreshCurrentMatch();
+    }
+  }, 2000);
+}
+
+function stopDisconnectWatcher() {
+  if (disconnectCheckInterval) {
+    clearInterval(disconnectCheckInterval);
+    disconnectCheckInterval = null;
+  }
+}
+
+async function forfeitCurrentMatchOnExit() {
+  const nickname = getSavedNickname();
+
+  // Always try to remove queue row, even if not in a match yet.
+  if (nickname) {
+    try {
+      await supabaseClient
+        .from("ranked_queue")
+        .delete()
+        .eq("nickname", nickname);
+    } catch (err) {
+      console.error("exit queue cleanup error:", err);
+    }
+  }
+
+  if (!currentMatch) return;
+
+  const info = getYouAndOpponent();
+  const opponent = info.opponent;
+
+  if (!opponent) return;
+
+  try {
+    await supabaseClient
+      .from("ranked_matches")
+      .update({
+        status: "finished",
+        winner: opponent,
+        round_winner: opponent
+      })
+      .eq("id", currentMatch.id)
+      .neq("status", "finished");
+  } catch (err) {
+    console.error("exit forfeit error:", err);
+  }
+}
+
+window.addEventListener("pagehide", () => {
+  forfeitCurrentMatchOnExit();
+});
+
+window.addEventListener("beforeunload", () => {
+  forfeitCurrentMatchOnExit();
+});
