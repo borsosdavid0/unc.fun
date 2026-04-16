@@ -1,117 +1,119 @@
-const box = document.getElementById("gameBox");
-const text = document.getElementById("text");
-const leaderboardList = document.getElementById("leaderboardList");
-const personalBestText = document.getElementById("personalBest");
+// reaction-test.js – now uses Supabase Auth for user identity
 
-const rankedBtn = document.getElementById("rankedBtn");
-const rankedStatus = document.getElementById("rankedStatus");
-const roundNumberText = document.getElementById("roundNumber");
-const youLivesText = document.getElementById("youLives");
+const box               = document.getElementById("gameBox");
+const text              = document.getElementById("text");
+const leaderboardList   = document.getElementById("leaderboardList");
+const personalBestText  = document.getElementById("personalBest");
+
+const rankedBtn         = document.getElementById("rankedBtn");
+const rankedStatus      = document.getElementById("rankedStatus");
+const roundNumberText   = document.getElementById("roundNumber");
+const youLivesText      = document.getElementById("youLives");
 const opponentLivesText = document.getElementById("opponentLives");
-const opponentNameText = document.getElementById("opponentName");
-const usernameChip = document.getElementById("usernameChip");
-const changeNameBtn = document.getElementById("changeNameBtn");
-
-const nameModal = document.getElementById("nameModal");
-const nicknameInput = document.getElementById("nicknameInput");
-const saveNameBtn = document.getElementById("saveNameBtn");
+const opponentNameText  = document.getElementById("opponentName");
+const usernameChip      = document.getElementById("usernameChip");
+const logoutBtn         = document.getElementById("logoutBtn");
+const authOverlay       = document.getElementById("authLoadingOverlay");
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const LOCAL_NAME_KEY = "reactionNickname";
+// ─── Auth state ───────────────────────────────────────────────────────────────
+// currentUserNickname replaces the old getSavedNickname() / localStorage system.
 
-function getBestKey() {
-  const nickname = getSavedNickname() || "guest";
-  return `reactionPersonalBest_${nickname}`;
+let currentUserNickname = null;
+
+function getSavedNickname() {
+  return currentUserNickname;
 }
 
-let soloState = "idle";
+function getBestKey() {
+  return `reactionPersonalBest_${currentUserNickname || "guest"}`;
+}
+
+async function initAuth() {
+  const { data: { session } } = await supabaseClient.auth.getSession();
+
+  if (!session) {
+    // Not logged in → send to auth page
+    window.location.href = "../auth/index.html";
+    return false;
+  }
+
+  const { data: profile } = await supabaseClient
+    .from("profiles")
+    .select("username")
+    .eq("id", session.user.id)
+    .maybeSingle();
+
+  if (!profile) {
+    // Profile not yet created (edge case) → back to auth
+    window.location.href = "../auth/index.html";
+    return false;
+  }
+
+  currentUserNickname = profile.username;
+  usernameChip.textContent = `👤 ${currentUserNickname}`;
+
+  // Hide loading overlay
+  authOverlay.style.opacity = "0";
+  setTimeout(() => authOverlay.remove(), 320);
+
+  return true;
+}
+
+// ─── Game state ───────────────────────────────────────────────────────────────
+
+let soloState  = "idle";
 let soloStartTime = 0;
 let soloTimeoutId = null;
 
 let mode = "solo";
-let currentMatch = null;
-let currentChannel = null;
-let queueChannel = null;
-let rankedClickLocked = false;
-let greenFlipTimer = null;
-let matchPoll = null;
-let isAttachingToMatch = false;
-let nextRoundTimer = null;
+let currentMatch        = null;
+let currentChannel      = null;
+let queueChannel        = null;
+let rankedClickLocked   = false;
+let greenFlipTimer      = null;
+let matchPoll           = null;
+let isAttachingToMatch  = false;
+let nextRoundTimer      = null;
 
-let heartbeatInterval = null;
+let heartbeatInterval      = null;
 let disconnectCheckInterval = null;
 
-loadPersonalBest();
-loadLeaderboard();
-checkUsernameOnOpen();
-updateUsernameChip();
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
 
-box.addEventListener("click", async () => {
-  if (!getSavedNickname()) {
-    showNameModal();
-    return;
-  }
+(async () => {
+  const ok = await initAuth();
+  if (!ok) return;
 
-  if (mode === "solo") {
-    handleSoloClick();
-  } else if (mode === "ranked") {
-    await handleRankedClick();
-  }
-});
-
-rankedBtn.addEventListener("click", async () => {
-  if (!getSavedNickname()) {
-    showNameModal();
-    return;
-  }
-
-  if (currentMatch) return;
-
-  await joinRankedQueue();
-});
-
-changeNameBtn.addEventListener("click", () => {
-  showNameModal();
-});
-
-saveNameBtn.addEventListener("click", () => {
-  const nickname = nicknameInput.value.trim().slice(0, 16);
-
-  if (!nickname) return;
-
-  localStorage.setItem(LOCAL_NAME_KEY, nickname);
-  hideNameModal();
-  updateUsernameChip();
   loadPersonalBest();
   loadLeaderboard();
-});
+  bindEvents();
+})();
 
-function checkUsernameOnOpen() {
-  if (!getSavedNickname()) {
-    showNameModal();
-  }
+function bindEvents() {
+  box.addEventListener("click", async () => {
+    if (mode === "solo") {
+      handleSoloClick();
+    } else if (mode === "ranked") {
+      await handleRankedClick();
+    }
+  });
+
+  rankedBtn.addEventListener("click", async () => {
+    if (currentMatch) return;
+    await joinRankedQueue();
+  });
+
+  logoutBtn.addEventListener("click", async () => {
+    await forfeitCurrentMatchOnExit();
+    cleanupRankedState();
+    await supabaseClient.auth.signOut();
+    window.location.href = "../auth/index.html";
+  });
 }
 
-function showNameModal() {
-  nicknameInput.value = getSavedNickname() || "";
-  nameModal.style.display = "flex";
-  nicknameInput.focus();
-}
-
-function hideNameModal() {
-  nameModal.style.display = "none";
-}
-
-function getSavedNickname() {
-  return (localStorage.getItem(LOCAL_NAME_KEY) || "").trim();
-}
-
-function updateUsernameChip() {
-  usernameChip.textContent = `User: ${getSavedNickname() || "--"}`;
-}
-
-// ─── Solo ────────────────────────────────────────────────────────────────────
+// ─── Solo ─────────────────────────────────────────────────────────────────────
 
 function handleSoloClick() {
   if (soloState === "idle") {
@@ -395,7 +397,7 @@ function watchForMatch() {
   }, 500);
 }
 
-// ─── Match attachment ─────────────────────────────────────────────────────────
+// ─── Match attachment ──────────────────────────────────────────────────────────
 
 async function attachToMatch(matchId) {
   const { data, error } = await supabaseClient
@@ -429,11 +431,7 @@ async function attachToMatch(matchId) {
 
   currentChannel = setInterval(async () => {
     await refreshCurrentMatch();
-
-    // Resolve as soon as both reactions exist.
     await maybeResolveRound();
-
-    // Start next round when appropriate.
     await maybeStartRound();
   }, 250);
 
@@ -460,19 +458,13 @@ async function refreshCurrentMatch() {
   renderRankedState();
 }
 
-// ─── UI rendering ─────────────────────────────────────────────────────────────
+// ─── UI rendering ──────────────────────────────────────────────────────────────
 
 function getYouAndOpponent() {
   const me = getSavedNickname();
 
   if (!currentMatch) {
-    return {
-      me,
-      opponent: "--",
-      myLives: 3,
-      oppLives: 3,
-      amPlayer1: false
-    };
+    return { me, opponent: "--", myLives: 3, oppLives: 3, amPlayer1: false };
   }
 
   const amPlayer1 = currentMatch.player1 === me;
@@ -480,7 +472,7 @@ function getYouAndOpponent() {
   return {
     me,
     opponent: amPlayer1 ? currentMatch.player2 : currentMatch.player1,
-    myLives: amPlayer1 ? currentMatch.player1_lives : currentMatch.player2_lives,
+    myLives:  amPlayer1 ? currentMatch.player1_lives : currentMatch.player2_lives,
     oppLives: amPlayer1 ? currentMatch.player2_lives : currentMatch.player1_lives,
     amPlayer1
   };
@@ -495,17 +487,13 @@ function renderRankedState() {
 
   const info = getYouAndOpponent();
 
-  opponentNameText.textContent = info.opponent || "--";
-  youLivesText.textContent = renderLives(info.myLives);
+  opponentNameText.textContent  = info.opponent || "--";
+  youLivesText.textContent      = renderLives(info.myLives);
   opponentLivesText.textContent = renderLives(info.oppLives);
-  roundNumberText.textContent = currentMatch.round_number;
+  roundNumberText.textContent   = currentMatch.round_number;
 
   if (currentMatch.status === "starting") {
-    if (greenFlipTimer) {
-      clearTimeout(greenFlipTimer);
-      greenFlipTimer = null;
-    }
-
+    if (greenFlipTimer) { clearTimeout(greenFlipTimer); greenFlipTimer = null; }
     rankedStatus.textContent = "Match found";
     text.textContent = `Match found vs ${info.opponent}`;
     box.className = "blue";
@@ -515,20 +503,15 @@ function renderRankedState() {
 
   if (currentMatch.status === "waiting_clicks") {
     const greenAt = new Date(currentMatch.green_at).getTime();
-    const isLive = Date.now() >= greenAt;
-
+    const isLive  = Date.now() >= greenAt;
     rankedStatus.textContent = isLive ? "Round live" : "Get ready...";
-    text.textContent = isLive ? "CLICK!" : "Wait for green...";
-    box.className = isLive ? "green" : "blue";
-    rankedBtn.textContent = "In Ranked Match";
+    text.textContent         = isLive ? "CLICK!"     : "Wait for green...";
+    box.className            = isLive ? "green"      : "blue";
+    rankedBtn.textContent    = "In Ranked Match";
   }
 
   if (currentMatch.status === "round_result") {
-    if (greenFlipTimer) {
-      clearTimeout(greenFlipTimer);
-      greenFlipTimer = null;
-    }
-
+    if (greenFlipTimer) { clearTimeout(greenFlipTimer); greenFlipTimer = null; }
     rankedStatus.textContent = currentMatch.round_winner
       ? `${currentMatch.round_winner} won round`
       : "Round result";
@@ -551,10 +534,7 @@ function renderRankedState() {
   }
 
   if (currentMatch.status === "finished") {
-    if (greenFlipTimer) {
-      clearTimeout(greenFlipTimer);
-      greenFlipTimer = null;
-    }
+    if (greenFlipTimer) { clearTimeout(greenFlipTimer); greenFlipTimer = null; }
 
     const won = currentMatch.winner === info.me;
 
@@ -564,43 +544,27 @@ function renderRankedState() {
       : "💀 You lost ranked. Click Play Ranked to retry.";
     box.className = won ? "green" : "red";
 
-    rankedBtn.disabled = false;
-        rankedBtn.disabled = false;
+    rankedBtn.disabled    = false;
     rankedBtn.textContent = "⚔️ Play Ranked";
 
     supabaseClient.from("ranked_queue").delete().eq("nickname", getSavedNickname());
 
-    if (currentChannel) {
-      clearInterval(currentChannel);
-      currentChannel = null;
-    }
-
-    if (matchPoll) {
-      clearInterval(matchPoll);
-      matchPoll = null;
-    }
-
-    if (greenFlipTimer) {
-      clearTimeout(greenFlipTimer);
-      greenFlipTimer = null;
-    }
-
-    if (nextRoundTimer) {
-      clearTimeout(nextRoundTimer);
-      nextRoundTimer = null;
-    }
+    if (currentChannel) { clearInterval(currentChannel); currentChannel = null; }
+    if (matchPoll)       { clearInterval(matchPoll);      matchPoll = null;       }
+    if (greenFlipTimer)  { clearTimeout(greenFlipTimer);  greenFlipTimer = null;  }
+    if (nextRoundTimer)  { clearTimeout(nextRoundTimer);  nextRoundTimer = null;  }
 
     stopHeartbeat();
     stopDisconnectWatcher();
 
-    currentMatch = null;
-    mode = "solo";
-    rankedClickLocked = false;
+    currentMatch       = null;
+    mode               = "solo";
+    rankedClickLocked  = false;
     isAttachingToMatch = false;
   }
 }
 
-// ─── Round logic ──────────────────────────────────────────────────────────────
+// ─── Round logic ───────────────────────────────────────────────────────────────
 
 async function maybeStartRound() {
   if (!currentMatch) return;
@@ -627,14 +591,8 @@ async function maybeStartRound() {
     .select()
     .single();
 
-  if (error) {
-    console.error("maybeStartRound error:", error);
-    return;
-  }
-
-  if (data) {
-    currentMatch = data;
-  }
+  if (error) { console.error("maybeStartRound error:", error); return; }
+  if (data)  { currentMatch = data; }
 
   await refreshCurrentMatch();
 }
@@ -647,13 +605,11 @@ async function handleRankedClick() {
   const info = getYouAndOpponent();
   const myReactionColumn = info.amPlayer1 ? "player1_reaction" : "player2_reaction";
 
-  // already submitted a valid click this round
   if (currentMatch[myReactionColumn] != null) return;
 
   const greenAt = new Date(currentMatch.green_at).getTime();
-  const now = Date.now();
+  const now     = Date.now();
 
-  // Early click: warn, but do NOT submit anything and do NOT lock the player
   if (now < greenAt) {
     text.textContent = "Too early 😭";
     box.className = "red";
@@ -689,40 +645,6 @@ async function handleRankedClick() {
   }, 200);
 }
 
-async function waitForRoundToFinish() {
-  if (!currentMatch) return;
-
-  const startedAt = Date.now();
-  const timeoutMs = 8000;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    await refreshCurrentMatch();
-    if (!currentMatch) return;
-
-    if (currentMatch.status === "round_result" || currentMatch.status === "finished") {
-      return;
-    }
-
-    const info = getYouAndOpponent();
-
-    if (
-      info.amPlayer1 &&
-      currentMatch.status === "waiting_clicks" &&
-      currentMatch.player1_reaction != null &&
-      currentMatch.player2_reaction != null
-    ) {
-      await maybeResolveRound();
-      await refreshCurrentMatch();
-      return;
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-
-  console.warn("waitForRoundToFinish timed out");
-  rankedClickLocked = false;
-}
-
 async function maybeResolveRound() {
   if (!currentMatch) return;
 
@@ -732,8 +654,8 @@ async function maybeResolveRound() {
   if (currentMatch.status !== "waiting_clicks") return;
   if (currentMatch.player1_reaction == null || currentMatch.player2_reaction == null) return;
 
-  let p1Lives = currentMatch.player1_lives;
-  let p2Lives = currentMatch.player2_lives;
+  let p1Lives    = currentMatch.player1_lives;
+  let p2Lives    = currentMatch.player2_lives;
   let roundWinner = null;
 
   if (currentMatch.player1_reaction < currentMatch.player2_reaction) {
@@ -745,7 +667,7 @@ async function maybeResolveRound() {
   }
 
   const finished = p1Lives <= 0 || p2Lives <= 0;
-  const winner = finished
+  const winner   = finished
     ? (p1Lives > p2Lives ? currentMatch.player1 : currentMatch.player2)
     : null;
 
@@ -763,18 +685,12 @@ async function maybeResolveRound() {
     .eq("id", currentMatch.id)
     .eq("status", "waiting_clicks");
 
-  if (error) {
-    console.error("maybeResolveRound error:", error);
-    return;
-  }
+  if (error) { console.error("maybeResolveRound error:", error); return; }
 
   await refreshCurrentMatch();
 
   if (!finished) {
-    if (nextRoundTimer) {
-      clearTimeout(nextRoundTimer);
-      nextRoundTimer = null;
-    }
+    if (nextRoundTimer) { clearTimeout(nextRoundTimer); nextRoundTimer = null; }
 
     nextRoundTimer = setTimeout(async () => {
       const { error: nextError } = await supabaseClient
@@ -790,10 +706,7 @@ async function maybeResolveRound() {
         .eq("id", currentMatch.id)
         .eq("status", "round_result");
 
-      if (nextError) {
-        console.error("next round error:", nextError);
-        return;
-      }
+      if (nextError) { console.error("next round error:", nextError); return; }
 
       await refreshCurrentMatch();
       await maybeStartRound();
@@ -801,45 +714,31 @@ async function maybeResolveRound() {
   }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function cleanupTimersOnly() {
-  if (greenFlipTimer) {
-    clearTimeout(greenFlipTimer);
-    greenFlipTimer = null;
-  }
-
-  if (nextRoundTimer) {
-    clearTimeout(nextRoundTimer);
-    nextRoundTimer = null;
-  }
+  if (greenFlipTimer) { clearTimeout(greenFlipTimer); greenFlipTimer = null; }
+  if (nextRoundTimer) { clearTimeout(nextRoundTimer); nextRoundTimer = null; }
 }
 
 function cleanupRankedState() {
   cleanupTimersOnly();
-
-  if (currentChannel) {
-    clearInterval(currentChannel);
-    currentChannel = null;
-  }
-
-  if (matchPoll) {
-    clearInterval(matchPoll);
-    matchPoll = null;
-  }
-
+  if (currentChannel) { clearInterval(currentChannel); currentChannel = null; }
+  if (matchPoll)       { clearInterval(matchPoll);      matchPoll = null;       }
   stopHeartbeat();
   stopDisconnectWatcher();
 }
 
 function escapeHtml(str) {
-  return str
+  return String(str)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+
+// ─── Heartbeat & disconnect watcher ───────────────────────────────────────────
 
 function getHeartbeatColumn() {
   const info = getYouAndOpponent();
@@ -856,26 +755,18 @@ function startHeartbeat() {
 
   heartbeatInterval = setInterval(async () => {
     if (!currentMatch) return;
-
     const column = getHeartbeatColumn();
-
     const { error } = await supabaseClient
       .from("ranked_matches")
       .update({ [column]: new Date().toISOString() })
       .eq("id", currentMatch.id)
       .neq("status", "finished");
-
-    if (error) {
-      console.error("heartbeat error:", error);
-    }
+    if (error) console.error("heartbeat error:", error);
   }, 2000);
 }
 
 function stopHeartbeat() {
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
-  }
+  if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
 }
 
 function startDisconnectWatcher() {
@@ -885,54 +776,39 @@ function startDisconnectWatcher() {
     if (!currentMatch) return;
     if (currentMatch.status === "finished") return;
 
-    const opponentColumn = getOpponentHeartbeatColumn();
+    const opponentColumn  = getOpponentHeartbeatColumn();
     const opponentLastSeen = currentMatch[opponentColumn];
 
     if (!opponentLastSeen) return;
 
     const diffMs = Date.now() - new Date(opponentLastSeen).getTime();
 
-    // if opponent hasn't been seen for 6 seconds, they lose
     if (diffMs > 6000) {
       const me = getSavedNickname();
-
       const { error } = await supabaseClient
         .from("ranked_matches")
-        .update({
-          status: "finished",
-          winner: me,
-          round_winner: me
-        })
+        .update({ status: "finished", winner: me, round_winner: me })
         .eq("id", currentMatch.id)
         .neq("status", "finished");
 
-      if (error) {
-        console.error("disconnect win error:", error);
-        return;
-      }
-
+      if (error) { console.error("disconnect win error:", error); return; }
       await refreshCurrentMatch();
     }
   }, 2000);
 }
 
 function stopDisconnectWatcher() {
-  if (disconnectCheckInterval) {
-    clearInterval(disconnectCheckInterval);
-    disconnectCheckInterval = null;
-  }
+  if (disconnectCheckInterval) { clearInterval(disconnectCheckInterval); disconnectCheckInterval = null; }
 }
+
+// ─── Exit / forfeit ────────────────────────────────────────────────────────────
 
 async function forfeitCurrentMatchOnExit() {
   const nickname = getSavedNickname();
 
-  // Always try to remove queue row, even if not in a match yet.
   if (nickname) {
     try {
-      await supabaseClient
-        .from("ranked_queue")
-        .delete()
-        .eq("nickname", nickname);
+      await supabaseClient.from("ranked_queue").delete().eq("nickname", nickname);
     } catch (err) {
       console.error("exit queue cleanup error:", err);
     }
@@ -940,7 +816,7 @@ async function forfeitCurrentMatchOnExit() {
 
   if (!currentMatch) return;
 
-  const info = getYouAndOpponent();
+  const info     = getYouAndOpponent();
   const opponent = info.opponent;
 
   if (!opponent) return;
@@ -948,11 +824,7 @@ async function forfeitCurrentMatchOnExit() {
   try {
     await supabaseClient
       .from("ranked_matches")
-      .update({
-        status: "finished",
-        winner: opponent,
-        round_winner: opponent
-      })
+      .update({ status: "finished", winner: opponent, round_winner: opponent })
       .eq("id", currentMatch.id)
       .neq("status", "finished");
   } catch (err) {
@@ -960,10 +832,5 @@ async function forfeitCurrentMatchOnExit() {
   }
 }
 
-window.addEventListener("pagehide", () => {
-  forfeitCurrentMatchOnExit();
-});
-
-window.addEventListener("beforeunload", () => {
-  forfeitCurrentMatchOnExit();
-});
+window.addEventListener("pagehide",      () => { forfeitCurrentMatchOnExit(); });
+window.addEventListener("beforeunload",  () => { forfeitCurrentMatchOnExit(); });

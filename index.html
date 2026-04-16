@@ -10,6 +10,11 @@
   <div class="bg-blur bg-1"></div>
   <div class="bg-blur bg-2"></div>
 
+  <!-- Auth bar – top-right corner, populated by script.js -->
+  <div class="auth-topbar" id="authTopbar">
+    <!-- Populated by JS -->
+  </div>
+
   <header class="hero">
     <p class="tag">interactive experiments</p>
     <h1>unc.fun</h1>
@@ -23,7 +28,7 @@
       <button class="game-card featured" data-title="Gravity Toy" data-desc="A physics sandbox with floating shapes and mouse gravity.">
         <span class="badge">NEW</span>
         <h2>Gravity Toy</h2>
-        <p>Physics + particles + chaos</p> 
+        <p>Physics + particles + chaos</p>
       </button>
 
       <button class="game-card" onclick="location.href='games/reaction-test.html'" data-title="Reaction Test" data-desc="Wait for the screen to turn green, then click as fast as possible.">
@@ -66,6 +71,8 @@
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config/supabase.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

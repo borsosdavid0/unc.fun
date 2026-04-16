@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In – unc.fun</title>
+  <style>
+    :root {
+      --bg: #070b14;
+      --panel: rgba(18, 24, 51, 0.88);
+      --text: #eef2ff;
+      --muted: #9aa6c7;
+      --accent: #7c5cff;
+      --accent2: #1fd1ff;
+      --green: #22c55e;
+      --red: #ef4444;
+      --border: rgba(255,255,255,0.08);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: Inter, Arial, sans-serif;
+      color: var(--text);
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(124,92,255,0.22), transparent 35%),
+        radial-gradient(circle at bottom right, rgba(31,209,255,0.18), transparent 35%),
+        linear-gradient(180deg, #060914, #0b1020 50%, #060914);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      padding: 32px 18px;
+      gap: 20px;
+    }
+
+    .back-link {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 10px 16px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: 0.2s;
+    }
+    .back-link:hover { color: var(--text); background: rgba(255,255,255,0.11); }
+
+    .logo {
+      text-align: center;
+    }
+    .logo h1 {
+      font-size: 2.6rem;
+      line-height: 1;
+      text-shadow: 0 0 30px rgba(124,92,255,0.35);
+      letter-spacing: -0.02em;
+    }
+    .logo p {
+      color: var(--muted);
+      margin-top: 7px;
+      font-size: 0.92rem;
+    }
+
+    .card {
+      width: min(460px, 100%);
+      background: rgba(255,255,255,0.035);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 24px 64px rgba(0,0,0,0.4);
+      padding: 30px;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      background: rgba(255,255,255,0.05);
+      border-radius: 14px;
+      padding: 4px;
+      margin-bottom: 26px;
+      gap: 4px;
+    }
+    .tab-btn {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      padding: 12px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: 0.2s;
+      letter-spacing: 0.01em;
+    }
+    .tab-btn.active {
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      color: white;
+      box-shadow: 0 4px 16px rgba(124,92,255,0.3);
+    }
+
+    /* Forms */
+    .form-panel { display: none; }
+    .form-panel.active { display: block; }
+
+    .field { margin-bottom: 14px; }
+    .field label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin-bottom: 7px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    .field label .hint {
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+      color: rgba(154,166,199,0.6);
+    }
+    .field input {
+      width: 100%;
+      padding: 13px 16px;
+      background: rgba(255,255,255,0.055);
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 12px;
+      color: var(--text);
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      font-family: inherit;
+    }
+    .field input:focus {
+      border-color: rgba(124,92,255,0.55);
+      box-shadow: 0 0 0 3px rgba(124,92,255,0.12);
+    }
+    .field input::placeholder { color: rgba(154,166,199,0.4); }
+
+    .submit-btn {
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      padding: 15px;
+      font-weight: 800;
+      font-size: 1rem;
+      cursor: pointer;
+      color: white;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      box-shadow: 0 10px 28px rgba(124,92,255,0.28);
+      transition: transform 0.18s, opacity 0.2s, box-shadow 0.2s;
+      margin-top: 6px;
+      letter-spacing: 0.01em;
+    }
+    .submit-btn:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 14px 36px rgba(124,92,255,0.38);
+    }
+    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Messages */
+    .msg {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-size: 0.88rem;
+      line-height: 1.5;
+      display: none;
+    }
+    .msg.error {
+      background: rgba(239,68,68,0.12);
+      border: 1px solid rgba(239,68,68,0.28);
+      color: #fca5a5;
+      display: block;
+    }
+    .msg.success {
+      background: rgba(34,197,94,0.12);
+      border: 1px solid rgba(34,197,94,0.28);
+      color: #86efac;
+      display: block;
+    }
+    .msg.info {
+      background: rgba(124,92,255,0.12);
+      border: 1px solid rgba(124,92,255,0.28);
+      color: #c4b5fd;
+      display: block;
+    }
+
+    /* Verify screen */
+    .verify-screen {
+      display: none;
+      text-align: center;
+      padding: 10px 0;
+    }
+    .verify-screen.active { display: block; }
+    .verify-icon { font-size: 3.2rem; margin-bottom: 16px; }
+    .verify-screen h2 { font-size: 1.6rem; margin-bottom: 10px; }
+    .verify-screen p {
+      color: var(--muted);
+      line-height: 1.65;
+      margin-bottom: 22px;
+      font-size: 0.95rem;
+    }
+    .verify-screen p strong { color: var(--text); }
+
+    .ghost-btn {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      padding: 12px 22px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 0.9rem;
+      transition: 0.2s;
+      font-family: inherit;
+    }
+    .ghost-btn:hover { background: rgba(255,255,255,0.10); }
+
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 20px 0;
+    }
+
+    .username-rules {
+      font-size: 0.8rem;
+      color: rgba(154,166,199,0.55);
+      margin-top: 5px;
+    }
+
+    @media (max-width: 500px) {
+      .card { padding: 22px 18px; }
+      body { padding: 80px 14px 32px; }
+    }
+  </style>
+</head>
+<body>
+  <a class="back-link" href="../index.html">← unc.fun</a>
+
+  <div class="logo">
+    <h1>unc.fun</h1>
+    <p>Your account for scores, ranked &amp; more</p>
+  </div>
+
+  <div class="card">
+    <!-- Tab toggle -->
+    <div class="tabs" id="tabRow">
+      <button class="tab-btn active" id="loginTab" onclick="switchTab('login')">Login</button>
+      <button class="tab-btn" id="registerTab" onclick="switchTab('register')">Register</button>
+    </div>
+
+    <!-- Login form -->
+    <div class="form-panel active" id="loginPanel">
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <button class="submit-btn" id="loginBtn" onclick="handleLogin()">Sign In</button>
+      <div class="msg" id="loginMsg"></div>
+    </div>
+
+    <!-- Register form -->
+    <div class="form-panel" id="registerPanel">
+      <div class="field">
+        <label>Username <span class="hint">(max 16 chars)</span></label>
+        <input type="text" id="regUsername" maxlength="16" placeholder="coolplayer99" autocomplete="off" />
+        <p class="username-rules">Letters, numbers, and underscores only.</p>
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="regEmail" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="field">
+        <label>Password <span class="hint">(min 8 chars)</span></label>
+        <input type="password" id="regPassword" placeholder="••••••••" autocomplete="new-password" />
+      </div>
+      <div class="field">
+        <label>Confirm Password</label>
+        <input type="password" id="regConfirm" placeholder="••••••••" autocomplete="new-password" />
+      </div>
+      <button class="submit-btn" id="registerBtn" onclick="handleRegister()">Create Account</button>
+      <div class="msg" id="registerMsg"></div>
+    </div>
+
+    <!-- Verify email screen (shown after registration) -->
+    <div class="verify-screen" id="verifyScreen">
+      <div class="verify-icon">📬</div>
+      <h2>Check your email</h2>
+      <p>
+        We sent a verification link to <strong id="verifyEmailText"></strong>.
+        Click it to activate your account, then return here to log in.
+      </p>
+      <button class="ghost-btn" onclick="showMainForms(); switchTab('login')">← Back to Login</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../config/supabase.js"></script>
+  <script src="auth.js"></script>
+</body>
+</html>

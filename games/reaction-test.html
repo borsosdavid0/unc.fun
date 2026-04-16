@@ -60,6 +60,8 @@
       padding: 10px 14px;
       background: rgba(255,255,255,0.08);
       transition: 0.2s ease;
+      font-family: inherit;
+      font-weight: 600;
     }
 
     .back-btn:hover,
@@ -68,12 +70,21 @@
       background: rgba(255,255,255,0.12);
     }
 
+    .topbar-right {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
     .username-chip {
       background: rgba(255,255,255,0.08);
       border: 1px solid rgba(255,255,255,0.08);
       padding: 10px 14px;
       border-radius: 12px;
       color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 600;
     }
 
     .layout {
@@ -158,6 +169,7 @@
       background: linear-gradient(90deg, var(--accent), var(--accent2));
       box-shadow: 0 12px 30px rgba(124,92,255,0.25);
       transition: transform 0.18s ease, opacity 0.2s ease;
+      font-family: inherit;
     }
 
     .ranked-btn:hover {
@@ -229,54 +241,18 @@
       background: var(--blue) !important;
     }
 
-    #nameModal {
+    /* Loading overlay while auth initialises */
+    #authLoadingOverlay {
       position: fixed;
       inset: 0;
-      background: rgba(0,0,0,0.6);
-      display: none;
+      background: #070b14;
+      display: flex;
       justify-content: center;
       align-items: center;
-      padding: 20px;
-    }
-
-    .modal-box {
-      width: min(420px, 95vw);
-      background: #121833;
-      border-radius: 20px;
-      padding: 22px;
-      box-shadow: 0 24px 80px rgba(0,0,0,0.45);
-    }
-
-    .modal-box h4 {
-      margin: 0 0 10px;
-      font-size: 1.2rem;
-    }
-
-    .modal-box p {
-      margin: 0 0 14px;
-      color: var(--muted);
-    }
-
-    .modal-box input {
-      width: 100%;
-      padding: 14px;
-      border-radius: 12px;
-      border: 1px solid #2c3765;
-      background: #0b1020;
-      color: white;
-      margin-bottom: 12px;
-      font-size: 1rem;
-    }
-
-    .save-btn {
-      width: 100%;
-      border: none;
-      border-radius: 12px;
-      padding: 14px;
-      font-weight: 800;
-      cursor: pointer;
-      color: white;
-      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      z-index: 999;
+      font-size: 1.1rem;
+      color: #9aa6c7;
+      transition: opacity 0.3s;
     }
 
     @media (max-width: 980px) {
@@ -291,13 +267,16 @@
   </style>
 </head>
 <body>
+  <!-- Auth loading overlay -->
+  <div id="authLoadingOverlay">Checking login…</div>
+
   <div class="page">
     <div class="topbar">
       <button class="back-btn" onclick="location.href='../index.html'">← Back</button>
 
-      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <div class="username-chip" id="usernameChip">User: --</div>
-        <button class="small-btn" id="changeNameBtn">Change Name</button>
+      <div class="topbar-right">
+        <div class="username-chip" id="usernameChip">👤 --</div>
+        <button class="small-btn" id="logoutBtn">Logout</button>
       </div>
     </div>
 
@@ -336,15 +315,6 @@
           </div>
         </div>
       </aside>
-    </div>
-  </div>
-
-  <div id="nameModal">
-    <div class="modal-box">
-      <h4>Choose username</h4>
-      <p>This is saved in your browser and used for solo + ranked.</p>
-      <input id="nicknameInput" type="text" maxlength="16" placeholder="Enter username" />
-      <button class="save-btn" id="saveNameBtn">Continue</button>
     </div>
   </div>
 
