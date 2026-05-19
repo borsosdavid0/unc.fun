@@ -23,9 +23,19 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 // ─── Auth state listener (catches email-verification callbacks) ───────────────
 sb.auth.onAuthStateChange(async (event, session) => {
   if (event === "SIGNED_IN" && session) {
-    // Make sure a profile row exists (handles first-time after email verify)
     await ensureProfileExists(session);
-    window.location.href = "../index.html";
+
+    const { data: profile } = await sb
+      .from("profiles")
+      .select("is_admin")
+      .eq("id", session.user.id)
+      .single();
+
+    if (profile?.is_admin) {
+      window.location.href = "../admin/index.html";
+    } else {
+      window.location.href = "../index.html";
+    }
   }
 });
 
@@ -74,7 +84,7 @@ function clearMsg(id) {
 // ─── Login ────────────────────────────────────────────────────────────────────
 
 async function handleLogin() {
-  const email    = document.getElementById("loginEmail").value.trim();
+  const email = document.getElementById("loginEmail").value.trim();
   const password = document.getElementById("loginPassword").value;
 
   clearMsg("loginMsg");
@@ -88,7 +98,7 @@ async function handleLogin() {
   btn.disabled = true;
   btn.textContent = "Signing in…";
 
-  const { error } = await sb.auth.signInWithPassword({ email, password });
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
 
   if (error) {
     showMsg("loginMsg", error.message, "error");
@@ -97,7 +107,19 @@ async function handleLogin() {
     return;
   }
 
-  // Redirect handled by onAuthStateChange SIGNED_IN event above.
+  await ensureProfileExists(data.session);
+
+  const { data: profile } = await sb
+    .from("profiles")
+    .select("is_admin")
+    .eq("id", data.session.user.id)
+    .single();
+
+  if (profile?.is_admin) {
+    window.location.href = "../admin/index.html";
+  } else {
+    window.location.href = "../index.html";
+  }
 }
 
 // ─── Register ─────────────────────────────────────────────────────────────────
