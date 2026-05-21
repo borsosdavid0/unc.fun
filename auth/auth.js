@@ -199,7 +199,7 @@ async function handleRegister() {
     password,
     options: {
       data: { username },                              // persisted in user_metadata
-      emailRedirectTo: window.location.origin + "/auth/index.html"
+      emailRedirectTo: "https://unc.fun/auth/index.html"
     }
   });
 
