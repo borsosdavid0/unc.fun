@@ -2,52 +2,172 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Admin Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Panel | unc.fun</title>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../config/supabase.js"></script>
 
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #0b0f1a;
-      color: white;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
+    :root {
+      --bg: #070b14;
+      --panel: rgba(18, 24, 51, 0.9);
+      --text: #eef2ff;
+      --muted: #9aa6c7;
+      --accent: #7c5cff;
+      --accent2: #1fd1ff;
+      --danger: #ef4444;
     }
 
-    .card {
-      background: #111827;
-      padding: 30px;
-      border-radius: 12px;
-      width: 400px;
-      text-align: center;
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(124,92,255,0.25), transparent 30%),
+        radial-gradient(circle at bottom right, rgba(31,209,255,0.18), transparent 30%),
+        linear-gradient(180deg, #060914, #0b1020);
+      padding: 28px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .brand {
+      font-size: 1.4rem;
+      font-weight: 900;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
     }
 
     button {
-      padding: 10px 15px;
-      margin-top: 15px;
       border: none;
-      border-radius: 8px;
+      border-radius: 12px;
+      padding: 11px 15px;
+      font-weight: 800;
       cursor: pointer;
+      color: white;
+      background: rgba(255,255,255,0.08);
+      transition: 0.2s;
     }
 
-    .danger { background: #ef4444; color: white; }
+    button:hover {
+      transform: translateY(-2px);
+      background: rgba(255,255,255,0.13);
+    }
+
+    .primary {
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+    }
+
+    .danger {
+      background: var(--danger);
+    }
+
+    .layout {
+      width: min(1100px, 100%);
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 22px;
+      padding: 22px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    }
+
+    h1, h2 {
+      margin-top: 0;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .stat {
+      background: rgba(255,255,255,0.06);
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 2rem;
+      margin-top: 8px;
+    }
+
+    @media (max-width: 800px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
 
-<div class="card">
-  <h1>🛠 Admin Panel</h1>
-  <p id="userInfo">Loading...</p>
+  <div class="topbar">
+    <div class="brand">🛠 unc.fun Admin</div>
 
-  <button class="danger" onclick="logout()">Logout</button>
-</div>
+    <div class="actions">
+      <button onclick="goHome()">← Main Website</button>
+      <button class="danger" onclick="logout()">Logout</button>
+    </div>
+  </div>
+
+  <main class="layout">
+    <section class="card">
+      <h1>Admin Dashboard</h1>
+      <p class="muted" id="userInfo">Checking admin access...</p>
+    </section>
+
+    <section class="grid">
+      <div class="stat">
+        <span class="muted">Users</span>
+        <strong id="usersCount">--</strong>
+      </div>
+
+      <div class="stat">
+        <span class="muted">Solo Scores</span>
+        <strong id="scoresCount">--</strong>
+      </div>
+
+      <div class="stat">
+        <span class="muted">Ranked Matches</span>
+        <strong id="matchesCount">--</strong>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Quick Actions</h2>
+      <p class="muted">Useful admin tools for testing.</p>
+
+      <button class="danger" onclick="clearRankedData()">Clear Ranked Matches</button>
+      <button class="danger" onclick="clearQueue()">Clear Ranked Queue</button>
+    </section>
+  </main>
 
 <script>
-const SUPABASE_URL = "YOUR_URL";
-const SUPABASE_ANON_KEY = "YOUR_KEY";
-
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 init();
@@ -55,25 +175,69 @@ init();
 async function init() {
   const { data: { session } } = await sb.auth.getSession();
 
-  // ❌ Not logged in → kick out
   if (!session) {
     window.location.href = "../auth/index.html";
     return;
   }
 
-  const user = session.user;
+  const { data: profile, error } = await sb
+    .from("profiles")
+    .select("username, is_admin")
+    .eq("id", session.user.id)
+    .single();
 
-  // ✅ THIS is your "admin check"
-  // simplest version: hardcode email
-  if (user.email !== "youradmin@email.com") {
+  if (error || !profile?.is_admin) {
     alert("Not authorized");
     window.location.href = "../index.html";
     return;
   }
 
-  // Show info
   document.getElementById("userInfo").textContent =
-    `Logged in as: ${user.email}`;
+    `Logged in as ${profile.username} (${session.user.email})`;
+
+  loadStats();
+}
+
+async function loadStats() {
+  const [{ count: users }, { count: scores }, { count: matches }] = await Promise.all([
+    sb.from("profiles").select("*", { count: "exact", head: true }),
+    sb.from("reaction_scores").select("*", { count: "exact", head: true }),
+    sb.from("ranked_matches").select("*", { count: "exact", head: true })
+  ]);
+
+  document.getElementById("usersCount").textContent = users ?? 0;
+  document.getElementById("scoresCount").textContent = scores ?? 0;
+  document.getElementById("matchesCount").textContent = matches ?? 0;
+}
+
+async function clearRankedData() {
+  if (!confirm("Delete all ranked matches?")) return;
+
+  const { error } = await sb.from("ranked_matches").delete().neq("id", 0);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  loadStats();
+}
+
+async function clearQueue() {
+  if (!confirm("Clear ranked queue?")) return;
+
+  const { error } = await sb.from("ranked_queue").delete().neq("id", 0);
+
+  if (error) {
+    alert(error.message);
+    return;
+  }
+
+  loadStats();
+}
+
+function goHome() {
+  window.location.href = "../index.html";
 }
 
 async function logout() {
