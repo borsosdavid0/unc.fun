@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin Panel</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0b0f1a;
+      color: white;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    .card {
+      background: #111827;
+      padding: 30px;
+      border-radius: 12px;
+      width: 400px;
+      text-align: center;
+    }
+
+    button {
+      padding: 10px 15px;
+      margin-top: 15px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .danger { background: #ef4444; color: white; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h1>🛠 Admin Panel</h1>
+  <p id="userInfo">Loading...</p>
+
+  <button class="danger" onclick="logout()">Logout</button>
+</div>
+
+<script>
+const SUPABASE_URL = "YOUR_URL";
+const SUPABASE_ANON_KEY = "YOUR_KEY";
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+init();
+
+async function init() {
+  const { data: { session } } = await sb.auth.getSession();
+
+  // ❌ Not logged in → kick out
+  if (!session) {
+    window.location.href = "../auth/index.html";
+    return;
+  }
+
+  const user = session.user;
+
+  // ✅ THIS is your "admin check"
+  // simplest version: hardcode email
+  if (user.email !== "youradmin@email.com") {
+    alert("Not authorized");
+    window.location.href = "../index.html";
+    return;
+  }
+
+  // Show info
+  document.getElementById("userInfo").textContent =
+    `Logged in as: ${user.email}`;
+}
+
+async function logout() {
+  await sb.auth.signOut();
+  window.location.href = "../auth/index.html";
+}
+</script>
+
+</body>
+</html>
